@@ -4,7 +4,6 @@
 
 #include "ttmlir/Dialect/D2M/Transforms/Passes.h"
 
-#include "ttmlir/AffineMapAnalysis.h"
 #include "ttmlir/AffineMapUtils.h"
 #include "ttmlir/Asserts.h"
 #include "ttmlir/Dialect/D2M/IR/D2MGenericRegionOps.h"
@@ -53,10 +52,6 @@ findMaxDimAndAspectRatio(ArrayRef<int64_t> physicalShape) {
   }
   return {maxDimIndex, aspectRatio};
 }
-
-static llvm::SmallVector<int64_t>
-computeOptimalBlockShardedGrid(ArrayRef<int64_t> physicalShape,
-                               ArrayRef<int64_t> targetSquareGridShape);
 
 static llvm::SmallVector<int64_t>
 computeOptimalVirtualGrid(ArrayRef<int64_t> physicalShape,
@@ -469,6 +464,11 @@ struct StreamLayoutUpdateInfo {
   llvm::SmallVector<int64_t> grid;
 };
 
+struct CompositeViewUpdateInfo {
+  d2m::CompositeViewOp op;
+  llvm::SmallVector<int64_t> grid;
+};
+
 struct EmptyUpdateInfo {
   d2m::EmptyOp op;
   llvm::SmallVector<int64_t> grid;
@@ -596,6 +596,7 @@ normalizeOperandGridsForGeneric(
 static std::tuple<llvm::SmallVector<llvm::SmallVector<int64_t>>,
                   llvm::SmallVector<ToLayoutUpdateInfo>,
                   llvm::SmallVector<StreamLayoutUpdateInfo>,
+                  llvm::SmallVector<CompositeViewUpdateInfo>,
                   llvm::SmallVector<EmptyUpdateInfo>>
 analyzeOperandsAndComputeGrids(d2m::GenericOp genericOp,
                                ArrayRef<int64_t> targetGridShape,
@@ -604,6 +605,7 @@ analyzeOperandsAndComputeGrids(d2m::GenericOp genericOp,
   SmallVector<SmallVector<int64_t>> optimalOperandGrids;
   llvm::SmallVector<ToLayoutUpdateInfo> toLayoutsToUpdate;
   llvm::SmallVector<StreamLayoutUpdateInfo> streamLayoutsToUpdate;
+  llvm::SmallVector<CompositeViewUpdateInfo> compositeViewsToUpdate;
   llvm::SmallVector<EmptyUpdateInfo> emptyOpsToUpdate;
 
   for (Value operand : genericOp.getInputsAndOutputs()) {
@@ -649,6 +651,9 @@ analyzeOperandsAndComputeGrids(d2m::GenericOp genericOp,
           toLayoutsToUpdate.push_back({toLayoutOp, inputOptimalGrid});
         }
       }
+    } else if (auto compositeViewOp =
+                   operand.getDefiningOp<d2m::CompositeViewOp>()) {
+      compositeViewsToUpdate.push_back({compositeViewOp, optimalGrid});
     } else if (auto toLayoutOp = operand.getDefiningOp<d2m::ToLayoutOp>()) {
       // Skip TTNN tensors as their grids are already correctly set.
       if (toLayoutOp.getInput().getDefiningOp<ttir::TTNNMetalLayoutCastOp>()) {
@@ -666,7 +671,7 @@ analyzeOperandsAndComputeGrids(d2m::GenericOp genericOp,
       normalizeOperandGridsForGeneric(genericOp, optimalOperandGrids);
 
   return {optimalOperandGrids, toLayoutsToUpdate, streamLayoutsToUpdate,
-          emptyOpsToUpdate};
+          compositeViewsToUpdate, emptyOpsToUpdate};
 }
 
 // Phase 2: Update ToLayoutOps with their optimal grids.
@@ -818,6 +823,66 @@ updateStreamLayoutOps(ArrayRef<StreamLayoutUpdateInfo> streamLayoutsToUpdate,
     if (storageEmpty.use_empty()) {
       storageEmpty.erase();
     }
+  }
+}
+
+static void
+updateCompositeViewOps(ArrayRef<CompositeViewUpdateInfo> compositeViewsToUpdate,
+                       ArrayRef<int64_t> targetGridShape,
+                       ArrayRef<int64_t> targetSquareGridShape) {
+  if (compositeViewsToUpdate.empty()) {
+    return;
+  }
+
+  OpBuilder builder(compositeViewsToUpdate.front().op->getContext());
+  for (const auto &info : compositeViewsToUpdate) {
+    auto compositeView = info.op;
+
+    // Reblock each input to its own optimal grid.
+    SmallVector<Value> reblockedInputs;
+    for (Value input : compositeView.getInputs()) {
+      auto inputType = mlir::cast<RankedTensorType>(input.getType());
+      auto inputLayout =
+          mlir::dyn_cast<ttcore::MetalLayoutAttr>(inputType.getEncoding());
+      if (!inputLayout) {
+        reblockedInputs.push_back(input);
+        continue;
+      }
+
+      llvm::SmallVector<int64_t> inputPhysShape = computePhysicalShape(
+          inputLayout, inputType, targetSquareGridShape, builder);
+      auto inputOptimalGrid =
+          computeOptimalGrid(inputType, inputPhysShape, targetSquareGridShape);
+
+      auto currentGrid = inputLayout.getGridShape(inputType);
+      if (llvm::ArrayRef(currentGrid) == llvm::ArrayRef(inputOptimalGrid)) {
+        reblockedInputs.push_back(input);
+        continue;
+      }
+
+      auto viewTensorType = utils::reblockTensor(inputType, inputOptimalGrid);
+      auto reblockMap = ttmlir::utils::calculateReblockMap(
+          inputType.getShape(), viewTensorType.getShape(),
+          builder.getContext());
+      builder.setInsertionPoint(compositeView);
+      auto view = builder.create<d2m::ViewLayoutOp>(
+          compositeView.getLoc(), viewTensorType, input, reblockMap,
+          /*reinterpretLayout=*/false);
+      reblockedInputs.push_back(view.getResult());
+    }
+
+    auto outType =
+        mlir::cast<RankedTensorType>(compositeView.getResult().getType());
+    RankedTensorType newOutType = tensorWithOptimalGrid(
+        outType, targetGridShape, targetSquareGridShape, info.grid, builder);
+
+    builder.setInsertionPoint(compositeView);
+    auto newCompositeView = builder.create<d2m::CompositeViewOp>(
+        compositeView.getLoc(), newOutType, reblockedInputs,
+        compositeView.getDim());
+
+    compositeView.getResult().replaceAllUsesWith(newCompositeView.getResult());
+    compositeView.erase();
   }
 }
 
@@ -1296,9 +1361,10 @@ static void assignGrids(d2m::GenericOp genericOp,
   if (!hasTTNNOperands(genericOp)) {
     llvm::SmallVector<ToLayoutUpdateInfo> toLayoutsToUpdate;
     llvm::SmallVector<StreamLayoutUpdateInfo> streamLayoutsToUpdate;
+    llvm::SmallVector<CompositeViewUpdateInfo> compositeViewsToUpdate;
     llvm::SmallVector<EmptyUpdateInfo> emptyOpsToUpdate;
     std::tie(optimalOperandGrids, toLayoutsToUpdate, streamLayoutsToUpdate,
-             emptyOpsToUpdate) =
+             compositeViewsToUpdate, emptyOpsToUpdate) =
         analyzeOperandsAndComputeGrids(genericOp, targetGridShape,
                                        targetSquareGridShape);
 
@@ -1307,6 +1373,9 @@ static void assignGrids(d2m::GenericOp genericOp,
 
     updateStreamLayoutOps(streamLayoutsToUpdate, targetSquareGridShape,
                           genericOp);
+
+    updateCompositeViewOps(compositeViewsToUpdate, targetGridShape,
+                           targetSquareGridShape);
 
     updateEmptyOps(emptyOpsToUpdate, targetGridShape, targetSquareGridShape);
   } else {
