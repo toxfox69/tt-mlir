@@ -92,6 +92,18 @@ createCoreVirtMaps(mlir::MLIRContext *context,
   return {forwardMap, inverseMap};
 }
 
+mlir::AffineMap createPhysicalToVirtualMap(mlir::MLIRContext *context,
+                                           int64_t startY, int64_t startX) {
+  mlir::AffineExpr d0 = getAffineDimExpr(0, context);
+  mlir::AffineExpr d1 = getAffineDimExpr(1, context);
+  mlir::AffineMap base =
+      mlir::AffineMap::get(2, 0,
+                           {d0 - getAffineConstantExpr(startY, context),
+                            d1 - getAffineConstantExpr(startX, context)},
+                           context);
+  return base.insertResult(getAffineConstantExpr(0, context), 0);
+}
+
 bool requiresVirtualGrid(llvm::ArrayRef<int64_t> gridShape,
                          llvm::ArrayRef<int64_t> deviceGridShape) {
   return gridShape.size() != 2 || gridShape[0] > deviceGridShape[0] ||
