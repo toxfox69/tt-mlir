@@ -1761,7 +1761,8 @@ MutableArrayRef<OpOperand> d2m::GenericOp::getInputsAndOutputsMutable() {
       AffineMap invMapNoDevice = gridInvMap.dropResult(0);
 
       SmallVector<int64_t> impliedVirtShape =
-          ttmlir::utils::evalShape(invMapNoDevice, physicalGridShape);
+          ttmlir::utils::evalRelativeGridShape(invMapNoDevice,
+                                               physicalGridShape);
 
       SmallVector<int64_t> outputGridShape =
           llvm::to_vector(ttcore::getGridShape(output));
@@ -2737,7 +2738,6 @@ Value d2m::GenericOp::findAssocCBByOperand(Operation *op, Value operand) {
 
   return findAssocCBByOperandIndex(op, operandIndex);
 }
-
 
 bool d2m::SpatialOp::bufferizesToMemoryRead(
     mlir::OpOperand &operand, const mlir::bufferization::AnalysisState &) {

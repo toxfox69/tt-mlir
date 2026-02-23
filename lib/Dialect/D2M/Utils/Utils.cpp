@@ -199,7 +199,7 @@ SmallVector<int64_t> getPhysicalGridShape(Value tensorOrMemref) {
     auto shapedType = dyn_cast<ShapedType>(tensorOrMemref.getType());
     TT_assert(shapedType);
     auto fullShape = shapedType.getShape();
-    auto physShape = ttmlir::utils::evalShape(*fwdMap, fullShape);
+    auto physShape = ttmlir::utils::evalRelativeGridShape(*fwdMap, fullShape);
     unsigned gridRank = fullShape.size() / 2;
     return SmallVector<int64_t>(physShape.begin(),
                                 physShape.begin() + gridRank);
