@@ -1122,7 +1122,7 @@ private:
 #endif // TTMLIR_ENABLE_OPMODEL
 
 // ============================================================================
-// SplitQKVFromSlices Pattern
+// SplitQueryKeyValueAndSplitHeadsOp Pattern
 // ============================================================================
 //
 // This pattern fuses a matmul followed by slices and reshapes into a single
@@ -1152,7 +1152,8 @@ private:
 // so the fused SplitQueryKeyValueAndSplitHeadsOp produces outputs correctly.
 //
 template <typename MatMulOpType>
-class SplitQKVFromSlicesPattern : public mlir::OpRewritePattern<MatMulOpType> {
+class SplitQueryKeyValueAndSplitHeadsFusing
+    : public mlir::OpRewritePattern<MatMulOpType> {
   using mlir::OpRewritePattern<MatMulOpType>::OpRewritePattern;
 
   static constexpr unsigned kRoleTraceMaxDepth = 20;
@@ -1651,7 +1652,7 @@ private:
 //   reshape [B,1,hidden] -> [1,1,B,hidden]
 //     -> nlp_create_qkv_heads_decode -> Q[1,B,H,D], K[1,B,Hkv,D], V[1,B,Hkv,D]
 //
-class SplitQKVPermuteToNLPDecodePattern
+class NLPCreateQKVHeadsDecodeOpFusing
     : public mlir::OpRewritePattern<SplitQueryKeyValueAndSplitHeadsOp> {
   using mlir::OpRewritePattern<
       SplitQueryKeyValueAndSplitHeadsOp>::OpRewritePattern;
@@ -1776,9 +1777,11 @@ public:
       patterns.add<fusing::RoPEFusing>(&getContext());
       patterns.add<fusing::RoPEDecodeFusing>(&getContext());
       patterns.add<SDPAFusing>(&getContext());
-      patterns.add<SplitQKVFromSlicesPattern<MatmulOp>>(&getContext());
-      patterns.add<SplitQKVFromSlicesPattern<LinearOp>>(&getContext());
-      patterns.add<SplitQKVPermuteToNLPDecodePattern>(&getContext());
+      patterns.add<SplitQueryKeyValueAndSplitHeadsFusing<MatmulOp>>(
+          &getContext());
+      patterns.add<SplitQueryKeyValueAndSplitHeadsFusing<LinearOp>>(
+          &getContext());
+      patterns.add<NLPCreateQKVHeadsDecodeOpFusing>(&getContext());
     }
 #endif // TTMLIR_ENABLE_OPMODEL
 
