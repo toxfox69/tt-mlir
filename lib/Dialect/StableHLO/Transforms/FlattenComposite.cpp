@@ -118,7 +118,7 @@ flattenOneComposite(mlir::stablehlo::CompositeOp comp,
   // 4b) Annotate cloned ops with original composite operand indices.
   llvm::DenseMap<mlir::Value, int64_t> captureToArgIndex;
   for (int64_t i = 0; i < static_cast<int64_t>(comp->getNumOperands()); ++i) {
-    captureToArgIndex[comp->getOperand(i)] = i;
+    captureToArgIndex.try_emplace(comp->getOperand(i), i);
   }
 
   for (mlir::Operation *cloned : clonedOps) {
