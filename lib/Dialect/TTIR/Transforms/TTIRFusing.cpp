@@ -1547,7 +1547,7 @@ private:
     bool allSameTransposeB = true;
     bool firstTransposeB = false;
 
-    bool isValid() const { return ops.size() == 3; }
+    bool isValid() const { return ops.size() >= 2; }
 
     bool getTargetTransposeB() const {
       return allSameTransposeB ? firstTransposeB : false;
@@ -2938,6 +2938,7 @@ public:
       RewritePatternSet patterns(&getContext());
       patterns.add<ConvTagWeights<Conv2dOp>>(&getContext());
       patterns.add<ConvTagWeights<Conv3dOp>>(&getContext());
+      patterns.add<MatmulWithBiasFusionPattern>(&getContext());
       if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
         signalPassFailure();
         return;
@@ -2977,7 +2978,6 @@ public:
       patterns.add<ConcatenateHeadsUpdatePattern>(&getContext());
       patterns.add<ScaledSumToMeanPattern>(&getContext());
       patterns.add<SpatialMeanOptimizationPattern>(&getContext());
-      patterns.add<MatmulWithBiasFusionPattern>(&getContext());
       patterns.add<QKVProjectionFusionPattern<MatmulOp>>(&getContext());
       patterns.add<QKVProjectionFusionPattern<LinearOp>>(&getContext());
       patterns.add<RMSNormFusionPattern>(&getContext());
