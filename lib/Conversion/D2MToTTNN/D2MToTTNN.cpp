@@ -280,7 +280,6 @@ public:
                   ConversionPatternRewriter &rewriter) const final {
 
     MLIRContext *ctx = rewriter.getContext();
-    const size_t size = op.getOperands().size();
     auto device = ttcore::lookupDevice(op->getParentOp());
     TT_assert(device);
 
@@ -311,20 +310,21 @@ public:
             ctx, ttnn::CoreCoordAttr::get(ctx, 0, 0),
             ttnn::CoreCoordAttr::get(ctx, endCoreRange[0], endCoreRange[1])));
 
-    llvm::SmallVector<Value> ios(size);
-    llvm::SmallVector<Value> cbs(size);
-    for (auto [i, operand] : llvm::enumerate(op.getNonCaptureOperands())) {
+    llvm::SmallVector<Value> ios(op.getInputsAndOutputs().size());
+    llvm::SmallVector<Value> cbs(op.getInputsAndOutputs().size());
+    for (auto [i, operand] : llvm::enumerate(op.getInputsAndOutputs())) {
       auto [io, cb] = extractIOAndCBFromGenericOperand(operand);
       ios[i] = io;
       cbs[i] = cb;
     }
 
-    llvm::SmallVector<Value> global_semaphores;
-    for (auto operand : op.getCaptureOperands()) {
+    llvm::SmallVector<Value> additionalArgs;
+    for (auto operand : op.getAdditionalArgs()) {
       if (mlir::isa<ttnn::GlobalSemaphoreType>(operand.getType())) {
-        global_semaphores.push_back(operand);
+        additionalArgs.push_back(operand);
       } else {
-        op.emitOpError("unexpected capture operand type: ")
+        op.emitOpError(
+            "unexpected operand type in d2m.generic's additionalArgs: ")
             << operand.getType();
         return failure();
       }
@@ -348,8 +348,8 @@ public:
     ttnn::ProgramAttr program = ttnn::ProgramAttr::get(
         ctx, kernelDescriptors, cbDescriptors, semaphoreDescriptors);
 
-    rewriter.replaceOpWithNewOp<ttnn::GenericOp>(
-        op, ios, global_semaphores, program, ttnn::MemoryConfigAttr());
+    rewriter.replaceOpWithNewOp<ttnn::GenericOp>(op, args, program,
+                                                 ttnn::MemoryConfigAttr());
     return success();
   };
 
