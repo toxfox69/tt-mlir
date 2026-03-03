@@ -492,32 +492,76 @@ def create_hoisted_unary_op(op_func, name):
     return hoisted_op
 
 
-hoisted_unary_ops = [
-    exp,
-    abs,
+hoisted_unary_ops_float = [
+    atan,
+    cbrt,
     ceil,
-    floor,
-    tanh,
-    reciprocal,
-    neg,
-    sigmoid,
-    sin,
     cos,
+    erf,
+    erfc,
+    exp,
+    expm1,
+    floor,
+    gelu,
+    hardsigmoid,
+    is_finite,
+    log1p,
+    mish,
+    reciprocal,
+    sigmoid,
+    sign,
+    silu,
+    sin,
+    tan,
+    tanh,
+]
+
+hoisted_unary_ops_float_integer = [
+    abs,
+    neg,
     relu,
 ]
 
 
+hoisted_shapes = [
+    (128, 128),
+    (1, 32),
+    (7, 41, 43, 11),
+]
+
+
 @x86_only
-@pytest.mark.parametrize("shape", [(128, 128)], ids=shape_str)
-@pytest.mark.parametrize("test_fn", hoisted_unary_ops)
+@pytest.mark.parametrize("shape", hoisted_shapes, ids=shape_str)
+@pytest.mark.parametrize("dtype", [torch.float32], ids=["f32"])
+@pytest.mark.parametrize("test_fn", hoisted_unary_ops_float)
 @pytest.mark.parametrize("target", ["ttnn", "ttmetal"])
-def test_cpu_hoistable_unary_ops(
-    test_fn: Callable,
-    shape: Shape,
-    request,
-    target: str,
-    device,
-    dtype: torch.dtype = torch.float32,
+def test_cpu_hoistable_unary_ops_float(
+    test_fn: Callable, shape: Shape, dtype: torch.dtype, request, target: str, device
+):
+    def module(builder: TTIRBuilder):
+        @builder.func([shape], [dtype])
+        def wrapper_func(
+            in0: Operand,
+            builder: TTIRBuilder,
+            unit_attrs: Optional[List[str]] = None,
+        ):
+            return test_fn(in0, builder, unit_attrs=["ttir.should_hoist"])
+
+    compile_and_execute_ttir(
+        module,
+        test_base=f"{request.node.name}",
+        target=target,
+        device=device,
+    )
+
+
+@x86_only
+@pytest.mark.parametrize("shape", hoisted_shapes, ids=shape_str)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32], ids=["f32", "i32"])
+@pytest.mark.parametrize("test_fn", hoisted_unary_ops_float_integer)
+@pytest.mark.parametrize("target", ["ttnn", "ttmetal"])
+def test_cpu_hoistable_unary_ops_float_integer(
+    test_fn: Callable, shape: Shape, dtype: torch.dtype, request, target: str, device
 ):
     def module(builder: TTIRBuilder):
         @builder.func([shape], [dtype])
