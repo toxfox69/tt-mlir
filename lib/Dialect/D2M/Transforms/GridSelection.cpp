@@ -29,14 +29,6 @@
 
 namespace mlir::tt::d2m {
 
-// Target grid shape and optional physical start coord (for spatial mapping).
-// When physicalStartCoord is set, it is the (y, x) start of the core range;
-// when empty, device-wide (identity mapping).
-struct TargetGridInfo {
-  llvm::SmallVector<int64_t, 2> shape;
-  std::optional<llvm::SmallVector<int64_t, 2>> physicalStartCoord;
-};
-
 //--------------------------------------------------------
 // Virtual Grid
 //--------------------------------------------------------
@@ -895,8 +887,7 @@ static d2m::SpatialOp getEnclosingSpatialOpIfPresent(d2m::GenericOp genericOp) {
 // nested linalg.generic result types.
 static void
 recreateGenericOp(d2m::GenericOp genericOp,
-                  ArrayRef<llvm::SmallVector<int64_t>> optimalOperandGrids,
-                  const TargetGridInfo &gridInfo) {
+                  ArrayRef<llvm::SmallVector<int64_t>> optimalOperandGrids) {
   if (optimalOperandGrids.empty()) {
     return;
   }
@@ -907,9 +898,8 @@ recreateGenericOp(d2m::GenericOp genericOp,
   OpBuilder builder(genericOp);
   llvm::SmallVector<Value> newOperands;
 
-  // When generic is inside a d2m.spatial region, insert new view_layout ops
-  // before the spatial op so they dominate it (avoid "operand does not
-  // dominate" when reconstructSpatialOperands runs).
+  // When generic is inside d2m.spatial, place new ops (e.g. view_layout)
+  // outside the spatial so that only the d2m.generic remains inside.
   d2m::SpatialOp enclosingSpatial = getEnclosingSpatialOpIfPresent(genericOp);
   if (enclosingSpatial) {
     builder.setInsertionPoint(enclosingSpatial);
@@ -954,6 +944,8 @@ recreateGenericOp(d2m::GenericOp genericOp,
     newOperands.push_back(view.getResult());
   }
 
+  // Reset insertion point so the new d2m.generic is created inside the
+  // spatial region (before the old generic).
   if (enclosingSpatial) {
     builder.setInsertionPoint(genericOp);
   }
@@ -968,23 +960,6 @@ recreateGenericOp(d2m::GenericOp genericOp,
 
     Region &oldRegion = genericOp.getRegion(0);
     auto newAdditionalArgs = genericOp.getAdditionalArgs();
-
-    // Use output operand's grid as the generic's grid. When the physical core
-    // range has an offset (e.g. grid runs on a subset of the device), add
-    // physical-to-virtual mapping so the generic's grid attr reflects it.
-    auto outputGridShape = optimalOperandGrids[genericOp.getNumDpsInputs()];
-    ttcore::GridAttr newGridAttr;
-    if (gridInfo.physicalStartCoord) {
-      mlir::AffineMap gridMap =
-          ttmlir::d2m::utils::grids::createPhysicalToVirtualMap(
-              builder.getContext(), (*gridInfo.physicalStartCoord)[0],
-              (*gridInfo.physicalStartCoord)[1]);
-      newGridAttr =
-          ttcore::GridAttr::get(builder.getContext(), outputGridShape, gridMap);
-    } else {
-      newGridAttr =
-          ttcore::GridAttr::get(builder.getContext(), outputGridShape);
-    }
 
     auto newGenericOp = builder.create<d2m::GenericOp>(
         genericOp.getLoc(), newInputs, newOutputs, newAdditionalArgs,
@@ -1107,8 +1082,7 @@ recreateGenericOp(d2m::GenericOp genericOp,
             }
           }
         },
-        /*singleThreadType=*/genericOp.getRegionThreadType(0),
-        /*grid=*/newGridAttr);
+        /*singleThreadType=*/genericOp.getRegionThreadType(0));
 
     // Preserve scratch_inputs attribute if present.
     if (auto scratchInputs = genericOp.getScratchInputsAttr()) {
@@ -1340,10 +1314,9 @@ insertTTNNDRAMViews(d2m::GenericOp genericOp,
 // computing the optimal grid per tensor independently, mirroring the old
 // TTIRToD2M behavior.
 static void assignGrids(d2m::GenericOp genericOp,
-                        const TargetGridInfo &gridInfo) {
+                        ArrayRef<int64_t> targetGridShape) {
   llvm::SmallVector<int64_t> targetSquareGridShape =
-      d2m::utils::getSquareTargetGrid(gridInfo.shape);
-  ArrayRef<int64_t> targetGridShape = gridInfo.shape;
+      d2m::utils::getSquareTargetGrid(targetGridShape);
 
   llvm::SmallVector<llvm::SmallVector<int64_t>> optimalOperandGrids;
   if (!hasTTNNOperands(genericOp)) {
@@ -1366,7 +1339,7 @@ static void assignGrids(d2m::GenericOp genericOp,
     optimalOperandGrids = insertTTNNDRAMViews(genericOp, targetSquareGridShape);
   }
 
-  recreateGenericOp(genericOp, optimalOperandGrids, gridInfo);
+  recreateGenericOp(genericOp, optimalOperandGrids);
 }
 
 // Resolve to a value that dominates the spatial op by following view_layout
@@ -1428,7 +1401,6 @@ static void reconstructSpatialOperands(d2m::SpatialOp spatialOp) {
 #include "ttmlir/Dialect/D2M/Transforms/Passes.h.inc"
 
 namespace {
-
 class D2MGridSelectionPass final
     : public impl::D2MGridSelectionBase<D2MGridSelectionPass> {
 public:
@@ -1448,8 +1420,9 @@ public:
       if (genericOp.isExplicitDatamovementForm()) {
         return;
       }
-      d2m::TargetGridInfo gridInfo = getTargetGridInfo(genericOp);
-      assignGrids(genericOp, gridInfo);
+      llvm::SmallVector<int64_t> targetGridShape =
+          getTargetGridShape(genericOp);
+      assignGrids(genericOp, targetGridShape);
     });
 
     // Rebuild each SpatialOp's ins/outs from the operands actually used by
@@ -1474,12 +1447,10 @@ private:
     return llvm::to_vector(device.getWorkerGrid().getShape());
   }
 
-  // Returns the target grid shape and optional physical start coord for
-  // genericOp. If it is inside a d2m.spatial region, uses that region's
-  // grid_ranges entry and the range start coord; otherwise returns the
-  // device-wide grid shape and no start coord (identity mapping).
-  d2m::TargetGridInfo getTargetGridInfo(d2m::GenericOp genericOp) {
-    d2m::TargetGridInfo info;
+  // Returns the target grid shape for genericOp. If it is inside a
+  // d2m.spatial region, uses that region's grid_ranges entry; otherwise
+  // returns the device-wide grid shape.
+  llvm::SmallVector<int64_t> getTargetGridShape(d2m::GenericOp genericOp) {
     d2m::SpatialOp spatialOp = getEnclosingSpatialOpIfPresent(genericOp);
     if (spatialOp) {
       mlir::Region *region = genericOp->getParentRegion();
@@ -1487,20 +1458,11 @@ private:
       unsigned regionIndex = region->getRegionNumber();
       if (regionIndex < coreRanges.size()) {
         ttcore::CoreRangeAttr range = coreRanges[regionIndex];
-        info.shape = {
-            range.getEndCoord().getY() - range.getStartCoord().getY() + 1,
-            range.getEndCoord().getX() - range.getStartCoord().getX() + 1};
-        int64_t startY = range.getStartCoord().getY();
-        int64_t startX = range.getStartCoord().getX();
-        if (startY != 0 || startX != 0) {
-          info.physicalStartCoord =
-              llvm::SmallVector<int64_t, 2>{startY, startX};
-        }
-        return info;
+        return {range.getEndCoord().getY() - range.getStartCoord().getY() + 1,
+                range.getEndCoord().getX() - range.getStartCoord().getX() + 1};
       }
     }
-    info.shape = getDeviceGridShape();
-    return info;
+    return getDeviceGridShape();
   }
 };
 } // namespace

@@ -41,13 +41,6 @@ createCoreVirtMaps(mlir::MLIRContext *context,
                    llvm::ArrayRef<int64_t> virtualGrid,
                    llvm::ArrayRef<int64_t> targetGrid);
 
-/// Creates a 2D affine map for grid physical -> (deviceId, virtual): takes
-/// physical grid coordinates (d0, d1) and produces (0, d0 - startY, d1 -
-/// startX). The leading 0 is the device id. Use for GridAttr mapping when the
-/// grid runs on a core range starting at (startY, startX).
-mlir::AffineMap createPhysicalToVirtualMap(mlir::MLIRContext *context,
-                                           int64_t startY, int64_t startX);
-
 /// Returns true if the given grid shape requires virtual grid mapping
 /// (core virtualization) to fit on the target device grid.
 /// This is the case when the grid is not 2D, or when any grid dimension
