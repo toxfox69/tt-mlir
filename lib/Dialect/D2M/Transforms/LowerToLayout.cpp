@@ -539,6 +539,30 @@ public:
     return false;
   }
 
+  // Set virtual grid mapping attributes on an EmptyOp when its grid is ND
+  // or exceeds device bounds.  This ensures downstream GenericOp::build can
+  // derive a correct grid with an inverse mapping to physical cores.
+  void setVirtualGridMappingIfNeeded(d2m::EmptyOp emptyOp,
+                                     ttcore::MetalLayoutAttr layout,
+                                     RankedTensorType type) const {
+    auto gridShape = llvm::to_vector(layout.getGridShape(type));
+    if (!ttmlir::d2m::utils::grids::requiresVirtualGrid(gridShape,
+                                                        targetGridShape)) {
+      return;
+    }
+    auto squareGrid = utils::getSquareTargetGrid(targetGridShape);
+    auto physGrid = utils::findLegalPhysicalGridForVolume(
+        ttmlir::utils::volume<int64_t>(gridShape), squareGrid);
+    if (physGrid.empty()) {
+      return;
+    }
+    auto *ctx = emptyOp.getContext();
+    auto [fwdMap, invMap] =
+        ttmlir::d2m::utils::grids::createCoreVirtMaps(ctx, gridShape, physGrid);
+    emptyOp.setVirtualGridInverseMappingAttr(AffineMapAttr::get(invMap));
+    emptyOp.setVirtualGridForwardMappingAttr(AffineMapAttr::get(fwdMap));
+  }
+
   Value lowerDatamovementGeneric(PatternRewriter &rewriter, Value input,
                                  Value output, Location loc) const {
     auto inputInfo = TensorInfo::from(input);
@@ -850,29 +874,9 @@ public:
       auto layout = mlir::dyn_cast<ttcore::MetalLayoutAttr>(type.getEncoding());
       auto emptyOp = rewriter.create<d2m::EmptyOp>(
           op.getLoc(), type.getShape(), type.getElementType(), layout);
-
-      // If the grid is ND or exceeds device bounds, set virtual grid
-      // mappings so that downstream GenericOp::build can derive a correct
-      // grid with an inverse mapping to physical cores.
       if (layout) {
-        auto gridShape = llvm::to_vector(layout.getGridShape(type));
-        if (ttmlir::d2m::utils::grids::requiresVirtualGrid(gridShape,
-                                                           targetGridShape)) {
-          auto squareGrid = utils::getSquareTargetGrid(targetGridShape);
-          auto physGrid = utils::findLegalPhysicalGridForVolume(
-              ttmlir::utils::volume<int64_t>(gridShape), squareGrid);
-          if (!physGrid.empty()) {
-            auto [fwdMap, invMap] =
-                ttmlir::d2m::utils::grids::createCoreVirtMaps(
-                    rewriter.getContext(), gridShape, physGrid);
-            emptyOp.setVirtualGridInverseMappingAttr(
-                AffineMapAttr::get(invMap));
-            emptyOp.setVirtualGridForwardMappingAttr(
-                AffineMapAttr::get(fwdMap));
-          }
-        }
+        setVirtualGridMappingIfNeeded(emptyOp, layout, type);
       }
-
       return emptyOp.getResult();
     };
 
@@ -951,22 +955,7 @@ public:
           op.getLoc(), currentInfo.type.getShape(),
           currentInfo.type.getElementType(), layout);
       if (layout) {
-        auto gridShape = llvm::to_vector(layout.getGridShape(currentInfo.type));
-        if (ttmlir::d2m::utils::grids::requiresVirtualGrid(gridShape,
-                                                           targetGridShape)) {
-          auto squareGrid = utils::getSquareTargetGrid(targetGridShape);
-          auto physGrid = utils::findLegalPhysicalGridForVolume(
-              ttmlir::utils::volume<int64_t>(gridShape), squareGrid);
-          if (!physGrid.empty()) {
-            auto [fwdMap, invMap] =
-                ttmlir::d2m::utils::grids::createCoreVirtMaps(
-                    rewriter.getContext(), gridShape, physGrid);
-            maskedEmptyOp.setVirtualGridInverseMappingAttr(
-                AffineMapAttr::get(invMap));
-            maskedEmptyOp.setVirtualGridForwardMappingAttr(
-                AffineMapAttr::get(fwdMap));
-          }
-        }
+        setVirtualGridMappingIfNeeded(maskedEmptyOp, layout, currentInfo.type);
       }
       auto maskedEmpty = maskedEmptyOp.getResult();
       currentValue =
