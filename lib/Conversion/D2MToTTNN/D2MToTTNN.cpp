@@ -348,8 +348,8 @@ public:
     ttnn::ProgramAttr program = ttnn::ProgramAttr::get(
         ctx, kernelDescriptors, cbDescriptors, semaphoreDescriptors);
 
-    rewriter.replaceOpWithNewOp<ttnn::GenericOp>(op, args, program,
-                                                 ttnn::MemoryConfigAttr());
+    rewriter.replaceOpWithNewOp<ttnn::GenericOp>(
+        op, ios, additionalArgs, program, ttnn::MemoryConfigAttr());
     return success();
   };
 
