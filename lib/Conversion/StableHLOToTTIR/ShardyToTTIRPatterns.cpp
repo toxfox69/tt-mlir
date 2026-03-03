@@ -197,8 +197,9 @@ public:
       // Create a new mesh shard op.
       auto outputType = mlir::cast<mlir::RankedTensorType>(
           getTypeConverter()->convertType(localArgType));
-      auto meshShardOp = rewriter.create<mlir::tt::ttir::MeshShardOp>(
-          loc, outputType, globalOperand, shardyMeshSharding->getShardType(),
+      auto meshShardOp = mlir::tt::ttir::MeshShardOp::create(
+          rewriter, loc, outputType, globalOperand,
+          shardyMeshSharding->getShardType(),
           shardyMeshSharding->getShardDirection(),
           shardyMeshSharding->getShardShape(),
           shardyMeshSharding->getShardDims());
@@ -229,8 +230,8 @@ public:
       // Create a new mesh shard op.
       auto outputType = mlir::cast<mlir::RankedTensorType>(
           getTypeConverter()->convertType(opResult.getType()));
-      auto meshShardOp = rewriter.create<mlir::tt::ttir::MeshShardOp>(
-          loc, outputType, returnOperand.get(),
+      auto meshShardOp = mlir::tt::ttir::MeshShardOp::create(
+          rewriter, loc, outputType, returnOperand.get(),
           // Explicitly set the shard type to Identity for outputs to prevent
           // each device from having the same redundant full copy of the tensor.
           // This mesh_shard op will eventually fully be removed in the future.

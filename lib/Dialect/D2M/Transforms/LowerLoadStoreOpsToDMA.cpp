@@ -30,14 +30,14 @@ namespace mlir::tt::d2m {
 
 static std::tuple<SmallVector<Value>, SmallVector<Value>, SmallVector<Value>>
 getLoopBounds(OpBuilder &builder, Location loc, ArrayRef<int64_t> shardShape) {
-  Value zero = builder.create<arith::ConstantOp>(loc, builder.getIndexType(),
-                                                 builder.getIndexAttr(0));
-  Value one = builder.create<arith::ConstantOp>(loc, builder.getIndexType(),
-                                                builder.getIndexAttr(1));
+  Value zero = arith::ConstantOp::create(builder, loc, builder.getIndexType(),
+                                         builder.getIndexAttr(0));
+  Value one = arith::ConstantOp::create(builder, loc, builder.getIndexType(),
+                                        builder.getIndexAttr(1));
   SmallVector<Value> lbs(shardShape.size(), zero);
   SmallVector<Value> ubs(llvm::map_range(shardShape, [&](int64_t dim) {
-    return builder.create<arith::ConstantOp>(loc, builder.getIndexType(),
-                                             builder.getIndexAttr(dim));
+    return arith::ConstantOp::create(builder, loc, builder.getIndexType(),
+                                     builder.getIndexAttr(dim));
   }));
   SmallVector<Value> step(shardShape.size(), one);
   return std::make_tuple(lbs, ubs, step);
@@ -138,7 +138,7 @@ static SmallVector<Value> applyMap(Builder &builder, Location loc,
                                    AffineMap map, ValueRange index,
                                    bool isRemote) {
   auto affineApply = [&](AffineMap map, ValueRange index) {
-    return builder.template create<affine::AffineApplyOp>(loc, map, index);
+    return affine::AffineApplyOp::create(builder, loc, map, index);
   };
 
   if (isRemote) {
@@ -271,8 +271,8 @@ public:
       SmallVector<Value> remoteIndices = gridIndices;
       SmallVector<Value> localIndices;
 
-      Value zero = builder.create<arith::ConstantOp>(
-          loc, builder.getIndexType(), builder.getIndexAttr(0));
+      Value zero = arith::ConstantOp::create(
+          builder, loc, builder.getIndexType(), builder.getIndexAttr(0));
       for (size_t i = 0; i < shardShape.size(); ++i) {
         remoteIndices.push_back(zero);
         localIndices.push_back(zero);
@@ -283,14 +283,14 @@ public:
       localIndices =
           applyMap(builder, loc, localMemoryMap, localIndices, false);
 
-      return builder.create<DMAReadOp>(
-          loc, remoteMemref, remoteIndices, localMemref, localIndices,
-          builder.getI64IntegerAttr(coalescingFactor));
+      return DMAReadOp::create(builder, loc, remoteMemref, remoteIndices,
+                               localMemref, localIndices,
+                               builder.getI64IntegerAttr(coalescingFactor));
     }
 
     // Strided/non-contiguous: generate loops with guarded DMAs
     auto [lbs, ubs, steps] = getLoopBounds(builder, loc, shardShape);
-    auto nullDmaTx = builder.create<NullTxOp>(loc);
+    auto nullDmaTx = NullTxOp::create(builder, loc);
 
     scf::LoopNest loopNest = scf::buildLoopNest(
         builder, loc, lbs, ubs, steps, ValueRange(nullDmaTx),
@@ -308,52 +308,50 @@ public:
                                   localIndices, false);
 
           // Create guarded DMA operation based on coalescing factor
-          Value cfExpr = loopBuilder.create<arith::ConstantOp>(
-              innerLoc, loopBuilder.getIndexType(),
+          Value cfExpr = arith::ConstantOp::create(
+              loopBuilder, innerLoc, loopBuilder.getIndexType(),
               loopBuilder.getIndexAttr(coalescingFactor));
-          Value zero = loopBuilder.create<arith::ConstantOp>(
-              innerLoc, loopBuilder.getIndexType(),
+          Value zero = arith::ConstantOp::create(
+              loopBuilder, innerLoc, loopBuilder.getIndexType(),
               loopBuilder.getIntegerAttr(loopBuilder.getIndexType(), 0));
 
           // Construct guard function: flat_index(iters) % coalescingFactor == 0
           auto totalIterCount = zero;
           size_t currStride = 1;
           for (int i = iters.size() - 1; i >= 0; i--) {
-            Value currStrideExpr = loopBuilder.create<arith::ConstantOp>(
-                innerLoc, loopBuilder.getIndexType(),
+            Value currStrideExpr = arith::ConstantOp::create(
+                loopBuilder, innerLoc, loopBuilder.getIndexType(),
                 loopBuilder.getIndexAttr(currStride));
-            auto scaledCount =
-                loopBuilder
-                    .create<arith::MulIOp>(innerLoc, currStrideExpr, iters[i])
-                    .getResult();
-            totalIterCount = loopBuilder
-                                 .create<arith::AddIOp>(innerLoc, scaledCount,
-                                                        totalIterCount)
+            auto scaledCount = arith::MulIOp::create(loopBuilder, innerLoc,
+                                                     currStrideExpr, iters[i])
+                                   .getResult();
+            totalIterCount = arith::AddIOp::create(loopBuilder, innerLoc,
+                                                   scaledCount, totalIterCount)
                                  .getResult();
             currStride *= shardShape[i];
           }
-          auto moduloIterCount =
-              loopBuilder
-                  .create<arith::RemSIOp>(innerLoc, totalIterCount, cfExpr)
-                  .getResult();
-          auto predicate = loopBuilder.create<arith::CmpIOp>(
-              innerLoc, arith::CmpIPredicate::eq, moduloIterCount, zero);
+          auto moduloIterCount = arith::RemSIOp::create(loopBuilder, innerLoc,
+                                                        totalIterCount, cfExpr)
+                                     .getResult();
+          auto predicate = arith::CmpIOp::create(loopBuilder, innerLoc,
+                                                 arith::CmpIPredicate::eq,
+                                                 moduloIterCount, zero);
 
-          auto nulltx = loopBuilder.create<NullTxOp>(innerLoc);
+          auto nulltx = NullTxOp::create(loopBuilder, innerLoc);
 
           // Build guarded DMA
-          auto ifExpr = loopBuilder.create<scf::IfOp>(
-              innerLoc, TypeRange(SmallVector<Value>{nulltx}), predicate,
-              true /*addThenBlock*/, true /*addElseBlock*/);
+          auto ifExpr = scf::IfOp::create(
+              loopBuilder, innerLoc, TypeRange(SmallVector<Value>{nulltx}),
+              predicate, true /*addThenBlock*/, true /*addElseBlock*/);
 
           auto thenBuilder = ifExpr.getThenBodyBuilder();
-          Value dmaTx = thenBuilder.create<DMAReadOp>(
-              innerLoc, remoteMemref, remoteIndices, localMemref, localIndices,
-              thenBuilder.getI64IntegerAttr(coalescingFactor));
-          thenBuilder.create<scf::YieldOp>(innerLoc, dmaTx);
+          Value dmaTx = DMAReadOp::create(
+              thenBuilder, innerLoc, remoteMemref, remoteIndices, localMemref,
+              localIndices, thenBuilder.getI64IntegerAttr(coalescingFactor));
+          scf::YieldOp::create(thenBuilder, innerLoc, dmaTx);
 
           auto elseBuilder = ifExpr.getElseBodyBuilder();
-          elseBuilder.create<scf::YieldOp>(innerLoc, args[0]);
+          scf::YieldOp::create(elseBuilder, innerLoc, args[0]);
 
           return SmallVector<Value>{ifExpr.getResult(0)};
         });
@@ -392,10 +390,10 @@ public:
       mcastVolume *= dimSize;
     }
 
-    Value zero = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getIndexType(), rewriter.getIndexAttr(0));
-    Value one = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexType(),
-                                                   rewriter.getIndexAttr(1));
+    Value zero = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIndexType(), rewriter.getIndexAttr(0));
+    Value one = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getIndexType(), rewriter.getIndexAttr(1));
 
     // Get pre-allocated semaphores for synchronization.
     // These must have been set by D2MPreallocateMcastSemaphores pass.
@@ -405,8 +403,9 @@ public:
 
     // Number of receivers is mcastVolume - 1 (excluding sender itself).
     // The sender waits for this many semaphore increments before multicasting.
-    Value numReceiversVal = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getIndexType(), rewriter.getIndexAttr(mcastVolume - 1));
+    Value numReceiversVal =
+        arith::ConstantOp::create(rewriter, loc, rewriter.getIndexType(),
+                                  rewriter.getIndexAttr(mcastVolume - 1));
 
     // Determine if this core is the sender.
     // The sender is at position mcastStartIndex[i] for each multicast
@@ -417,13 +416,13 @@ public:
     ValueRange mcastStartIndex = remoteLoad.getMcastStartIndex();
     for (size_t i = 0; i < isMcastDim.size(); ++i) {
       if (isMcastDim[i]) {
-        Value coreIdx = rewriter.create<CoreIndexOp>(
-            loc, static_cast<int64_t>(i), gridMapping);
-        Value condition = rewriter.create<arith::CmpIOp>(
-            loc, rewriter.getI1Type(), arith::CmpIPredicate::eq, coreIdx,
-            mcastStartIndex[i]);
+        Value coreIdx = CoreIndexOp::create(
+            rewriter, loc, static_cast<int64_t>(i), gridMapping);
+        Value condition = arith::CmpIOp::create(
+            rewriter, loc, rewriter.getI1Type(), arith::CmpIPredicate::eq,
+            coreIdx, mcastStartIndex[i]);
         if (isSender) {
-          isSender = rewriter.create<arith::AndIOp>(loc, isSender, condition)
+          isSender = arith::AndIOp::create(rewriter, loc, isSender, condition)
                          .getResult();
         } else {
           isSender = condition;
@@ -434,30 +433,30 @@ public:
 
     // Reserve CB unconditionally before branching - both sender and receiver
     // need to reserve to maintain proper circular buffer semantics
-    Value localMemref = rewriter.create<ReserveOp>(loc, cb).getResult();
+    Value localMemref = ReserveOp::create(rewriter, loc, cb).getResult();
 
-    rewriter.create<scf::IfOp>(
-        loc, isSender,
+    scf::IfOp::create(
+        rewriter, loc, isSender,
         [&](OpBuilder &builder, Location loc) {
           // Sender: gather data from remote with proper coalescing
           // This handles both contiguous and strided memory accesses
           Value dmaTx = generateDMAReads(
               builder, loc, remoteMemref, localMemref, gridIndices, shardShape,
               remoteMemoryMap, localMemoryMap, coalescingFactor, shardVolume);
-          builder.create<DMAWaitOp>(loc, dmaTx);
+          DMAWaitOp::create(builder, loc, dmaTx);
 
           // Wait for all receivers to be ready (mcastVolume - 1, excluding
           // sender)
-          builder.create<SemaphoreWaitOp>(loc, receiversReadySemaphore,
-                                          numReceiversVal, zero);
+          SemaphoreWaitOp::create(builder, loc, receiversReadySemaphore,
+                                  numReceiversVal, zero);
 
           // Build full indices for the local memref
           // Use the localMemref from ReserveOp (Producer) for the multicast.
           // The sender has already written data into this buffer via DMA read,
           // so we read from the same Producer buffer for multicast.
           SmallVector<Value> mcastLocalIndices;
-          Value zeroLocal = builder.create<arith::ConstantOp>(
-              loc, builder.getIndexType(), builder.getIndexAttr(0));
+          Value zeroLocal = arith::ConstantOp::create(
+              builder, loc, builder.getIndexType(), builder.getIndexAttr(0));
           for (size_t i = 0; i < shardShape.size(); ++i) {
             mcastLocalIndices.push_back(zeroLocal);
           }
@@ -469,24 +468,24 @@ public:
           // be sent to other cores. We use localMemref (from ReserveOp) as both
           // source and destination - this is the Producer buffer that was just
           // filled by the DMA read above.
-          Value mcastTx = builder.create<DMAWriteOp>(
-              loc, localMemref, mcastLocalIndices, localMemref,
+          Value mcastTx = DMAWriteOp::create(
+              builder, loc, localMemref, mcastLocalIndices, localMemref,
               mcastLocalIndices, shardVolume, remoteLoad.getMcastStartIndex(),
               remoteLoad.getMcastShape());
-          builder.create<DMAWaitOp>(loc, mcastTx);
+          DMAWaitOp::create(builder, loc, mcastTx);
 
           // Signal receivers that sender is finished
-          builder.create<SemaphoreSetOp>(loc, senderFinishedSemaphore, one,
-                                         remoteLoad.getMcastStartIndex(),
-                                         remoteLoad.getMcastShape());
+          SemaphoreSetOp::create(builder, loc, senderFinishedSemaphore, one,
+                                 remoteLoad.getMcastStartIndex(),
+                                 remoteLoad.getMcastShape());
 
-          builder.create<scf::YieldOp>(loc);
+          scf::YieldOp::create(builder, loc);
         },
         [&](OpBuilder &builder, Location loc) {
           // Receiver: signal ready and wait for sender to finish
           SmallVector<Value> senderCoreIndex;
-          Value zeroIdx = builder.create<arith::ConstantOp>(
-              loc, builder.getIndexType(), builder.getIndexAttr(0));
+          Value zeroIdx = arith::ConstantOp::create(
+              builder, loc, builder.getIndexType(), builder.getIndexAttr(0));
 
           // Build sender core index by reading actual core positions
           // For dimensions that are multicast, sender is at mcastStartIndex
@@ -498,23 +497,23 @@ public:
               senderCoreIndex.push_back(mcastStartIndex[i]);
             } else {
               // Non-multicast dimension - use current core's position
-              Value currentCoreIdx = builder.create<CoreIndexOp>(
-                  loc, static_cast<int64_t>(i), gridMapping);
+              Value currentCoreIdx = CoreIndexOp::create(
+                  builder, loc, static_cast<int64_t>(i), gridMapping);
               senderCoreIndex.push_back(currentCoreIdx);
             }
           }
 
-          builder.create<SemaphoreIncOp>(loc, receiversReadySemaphore, one,
-                                         senderCoreIndex);
-          builder.create<SemaphoreWaitOp>(loc, senderFinishedSemaphore, one,
-                                          zeroIdx);
+          SemaphoreIncOp::create(builder, loc, receiversReadySemaphore, one,
+                                 senderCoreIndex);
+          SemaphoreWaitOp::create(builder, loc, senderFinishedSemaphore, one,
+                                  zeroIdx);
 
           // Note: CB already reserved before the if/else, so receiver has
           // proper access to the multicast data
 
-          builder.create<scf::YieldOp>(loc);
+          scf::YieldOp::create(builder, loc);
         });
-    rewriter.create<PushOp>(loc, cb);
+    PushOp::create(rewriter, loc, cb);
 
     rewriter.eraseOp(remoteLoad);
     return success();
@@ -581,7 +580,7 @@ public:
     }
 
     // Unicast path: reserve CB and generate DMA reads with proper coalescing
-    Value localMemref = rewriter.create<ReserveOp>(loc, cb).getResult();
+    Value localMemref = ReserveOp::create(rewriter, loc, cb).getResult();
     Value dmaTx = generateDMAReads(
         rewriter, loc, remoteMemref, localMemref, gridIndices, shardShape,
         remoteMemoryMap, localMemoryMap, coalescingFactor, shardVolume);
@@ -589,8 +588,8 @@ public:
     rewriter.eraseOp(remoteLoad);
 
     // Wait for DMA to complete
-    rewriter.create<DMAWaitOp>(loc, dmaTx);
-    rewriter.create<PushOp>(loc, cb);
+    DMAWaitOp::create(rewriter, loc, dmaTx);
+    PushOp::create(rewriter, loc, cb);
     return success();
   }
 };
@@ -619,15 +618,15 @@ public:
                                  AffineMap localMemoryMap, Value cb,
                                  size_t coalescingFactor, size_t shardVolume) {
     // Reserve CB to get the local memref
-    Value localMemref = builder.create<WaitOp>(loc, cb).getResult();
+    Value localMemref = WaitOp::create(builder, loc, cb).getResult();
 
     if (coalescingFactor == shardVolume) {
       // Fully contiguous: single DMA operation
       SmallVector<Value> remoteIndices = gridIndices;
       SmallVector<Value> localIndices;
 
-      Value zero = builder.create<arith::ConstantOp>(
-          loc, builder.getIndexType(), builder.getIndexAttr(0));
+      Value zero = arith::ConstantOp::create(
+          builder, loc, builder.getIndexType(), builder.getIndexAttr(0));
       for (size_t i = 0; i < shardShape.size(); ++i) {
         remoteIndices.push_back(zero);
         localIndices.push_back(zero);
@@ -638,14 +637,13 @@ public:
       localIndices =
           applyMap(builder, loc, localMemoryMap, localIndices, false);
 
-      return builder.create<DMAWriteOp>(loc, localMemref, localIndices,
-                                        remoteMemref, remoteIndices,
-                                        coalescingFactor);
+      return DMAWriteOp::create(builder, loc, localMemref, localIndices,
+                                remoteMemref, remoteIndices, coalescingFactor);
     }
 
     // Strided/non-contiguous: generate loops with guarded DMAs
     auto [lbs, ubs, steps] = getLoopBounds(builder, loc, shardShape);
-    auto nullDmaTx = builder.create<NullTxOp>(loc);
+    auto nullDmaTx = NullTxOp::create(builder, loc);
 
     scf::LoopNest loopNest = scf::buildLoopNest(
         builder, loc, lbs, ubs, steps, ValueRange(nullDmaTx),
@@ -663,52 +661,50 @@ public:
                                   localIndices, false);
 
           // Create guarded DMA operation based on coalescing factor
-          Value cfExpr = loopBuilder.create<arith::ConstantOp>(
-              innerLoc, loopBuilder.getIndexType(),
+          Value cfExpr = arith::ConstantOp::create(
+              loopBuilder, innerLoc, loopBuilder.getIndexType(),
               loopBuilder.getIndexAttr(coalescingFactor));
-          Value zero = loopBuilder.create<arith::ConstantOp>(
-              innerLoc, loopBuilder.getIndexType(),
+          Value zero = arith::ConstantOp::create(
+              loopBuilder, innerLoc, loopBuilder.getIndexType(),
               loopBuilder.getIntegerAttr(loopBuilder.getIndexType(), 0));
 
           // Construct guard function: flat_index(iters) % coalescingFactor == 0
           auto totalIterCount = zero;
           size_t currStride = 1;
           for (int i = iters.size() - 1; i >= 0; i--) {
-            Value currStrideExpr = loopBuilder.create<arith::ConstantOp>(
-                innerLoc, loopBuilder.getIndexType(),
+            Value currStrideExpr = arith::ConstantOp::create(
+                loopBuilder, innerLoc, loopBuilder.getIndexType(),
                 loopBuilder.getIndexAttr(currStride));
-            auto scaledCount =
-                loopBuilder
-                    .create<arith::MulIOp>(innerLoc, currStrideExpr, iters[i])
-                    .getResult();
-            totalIterCount = loopBuilder
-                                 .create<arith::AddIOp>(innerLoc, scaledCount,
-                                                        totalIterCount)
+            auto scaledCount = arith::MulIOp::create(loopBuilder, innerLoc,
+                                                     currStrideExpr, iters[i])
+                                   .getResult();
+            totalIterCount = arith::AddIOp::create(loopBuilder, innerLoc,
+                                                   scaledCount, totalIterCount)
                                  .getResult();
             currStride *= shardShape[i];
           }
-          auto moduloIterCount =
-              loopBuilder
-                  .create<arith::RemSIOp>(innerLoc, totalIterCount, cfExpr)
-                  .getResult();
-          auto predicate = loopBuilder.create<arith::CmpIOp>(
-              innerLoc, arith::CmpIPredicate::eq, moduloIterCount, zero);
+          auto moduloIterCount = arith::RemSIOp::create(loopBuilder, innerLoc,
+                                                        totalIterCount, cfExpr)
+                                     .getResult();
+          auto predicate = arith::CmpIOp::create(loopBuilder, innerLoc,
+                                                 arith::CmpIPredicate::eq,
+                                                 moduloIterCount, zero);
 
-          auto nulltx = loopBuilder.create<NullTxOp>(innerLoc);
+          auto nulltx = NullTxOp::create(loopBuilder, innerLoc);
 
           // Build guarded DMA
-          auto ifExpr = loopBuilder.create<scf::IfOp>(
-              innerLoc, TypeRange(SmallVector<Value>{nulltx}), predicate,
-              true /*addThenBlock*/, true /*addElseBlock*/);
+          auto ifExpr = scf::IfOp::create(
+              loopBuilder, innerLoc, TypeRange(SmallVector<Value>{nulltx}),
+              predicate, true /*addThenBlock*/, true /*addElseBlock*/);
 
           auto thenBuilder = ifExpr.getThenBodyBuilder();
-          Value dmaTx = thenBuilder.create<DMAWriteOp>(
-              innerLoc, localMemref, localIndices, remoteMemref, remoteIndices,
-              coalescingFactor);
-          thenBuilder.create<scf::YieldOp>(innerLoc, dmaTx);
+          Value dmaTx = DMAWriteOp::create(thenBuilder, innerLoc, localMemref,
+                                           localIndices, remoteMemref,
+                                           remoteIndices, coalescingFactor);
+          scf::YieldOp::create(thenBuilder, innerLoc, dmaTx);
 
           auto elseBuilder = ifExpr.getElseBodyBuilder();
-          elseBuilder.create<scf::YieldOp>(innerLoc, args[0]);
+          scf::YieldOp::create(elseBuilder, innerLoc, args[0]);
 
           return SmallVector<Value>{ifExpr.getResult(0)};
         });
@@ -777,9 +773,9 @@ public:
     rewriter.eraseOp(remoteStore);
 
     // Wait for DMA to complete
-    rewriter.create<DMAWaitOp>(loc, dmaTx);
+    DMAWaitOp::create(rewriter, loc, dmaTx);
     // Pop the circular buffer to signal consumption
-    rewriter.create<PopOp>(loc, cb);
+    PopOp::create(rewriter, loc, cb);
     return success();
   }
 };

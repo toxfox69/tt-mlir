@@ -107,7 +107,7 @@ private:
 
     OpBuilder builder(&block, block.begin());
     auto scratchFromCBOp =
-        builder.create<GetScratchFromCBOp>(genericOp.getLoc(), scratchCBArg);
+        GetScratchFromCBOp::create(builder, genericOp.getLoc(), scratchCBArg);
 
     Value scratchMemRef = scratchFromCBOp.getResult();
     auto scratchMemRefType = mlir::cast<MemRefType>(scratchMemRef.getType());
@@ -159,9 +159,9 @@ private:
     SmallVector<OpFoldResult> strides = {builder.getIndexAttr(1),
                                          builder.getIndexAttr(1)};
 
-    auto subviewOp = builder.create<memref::SubViewOp>(
-        loc, mlir::cast<MemRefType>(inferredType), scratchMemRef, offsets,
-        sizes, strides);
+    auto subviewOp = memref::SubViewOp::create(
+        builder, loc, mlir::cast<MemRefType>(inferredType), scratchMemRef,
+        offsets, sizes, strides);
 
     allocOp.getResult().replaceAllUsesWith(subviewOp.getResult());
     allocOp.erase();

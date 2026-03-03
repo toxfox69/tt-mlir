@@ -562,8 +562,8 @@ private:
 
     auto dataType = ttcore::DataType::BFloat16;
     auto castType = utils::RankedTensorTypeFactory::create(vType, dataType);
-    return rewriter.create<TypecastOp>(
-        v.getLoc(), castType, v,
+    return TypecastOp::create(
+        rewriter, v.getLoc(), castType, v,
         ttcore::DataTypeAttr::get(rewriter.getContext(), dataType));
   }
 
@@ -579,8 +579,8 @@ private:
 
     // Create new tensor type with correctly updated encoding.
     auto castType = utils::RankedTensorTypeFactory::create(vType, dataType);
-    return rewriter.create<TypecastOp>(
-        v.getLoc(), castType, v,
+    return TypecastOp::create(
+        rewriter, v.getLoc(), castType, v,
         ttcore::DataTypeAttr::get(rewriter.getContext(), dataType));
   }
 
@@ -744,8 +744,8 @@ private:
     auto resultType =
         utils::RankedTensorTypeFactory::create(maskType, resultShape);
 
-    return rewriter.create<SliceStaticOp>(
-        loc, resultType, mask, rewriter.getI32ArrayAttr(begins),
+    return SliceStaticOp::create(
+        rewriter, loc, resultType, mask, rewriter.getI32ArrayAttr(begins),
         rewriter.getI32ArrayAttr(ends), rewriter.getI32ArrayAttr(steps));
   }
 
@@ -1004,7 +1004,7 @@ private:
         maskType.getShape(), targetShape);
     auto shapeAttr = ShapeAttr::get(rewriter.getContext(), broadcastDims);
 
-    return rewriter.create<RepeatOp>(loc, broadcastType, mask, shapeAttr);
+    return RepeatOp::create(rewriter, loc, broadcastType, mask, shapeAttr);
   }
 
   mlir::LogicalResult createSDPAOp(mlir::PatternRewriter &rewriter,
@@ -1050,9 +1050,9 @@ private:
           llvm::to_vector(kToDecodePermutation), rewriter,
           c.attentionMatmul.getLoc());
 
-      auto decodeOp = rewriter.create<ScaledDotProductAttentionDecodeOp>(
-          c.attentionMatmul.getLoc(), permutedQuery.getType(), permutedQuery,
-          c.key, c.value,
+      auto decodeOp = ScaledDotProductAttentionDecodeOp::create(
+          rewriter, c.attentionMatmul.getLoc(), permutedQuery.getType(),
+          permutedQuery, c.key, c.value,
           /*is_causal=*/rewriter.getBoolAttr(false), attentionMask,
           /*cur_pos_tensor=*/Value(),
           /*attention_sink=*/Value(), scaleAttr,
@@ -1086,9 +1086,9 @@ private:
 
       rewriter.replaceOp(c.attentionMatmul, finalResult);
     } else {
-      auto sdpaOp = rewriter.create<ScaledDotProductAttentionOp>(
-          c.attentionMatmul.getLoc(), c.query.getType(), c.query, c.key,
-          c.value, attentionMask,
+      auto sdpaOp = ScaledDotProductAttentionOp::create(
+          rewriter, c.attentionMatmul.getLoc(), c.query.getType(), c.query,
+          c.key, c.value, attentionMask,
           /*is_causal=*/rewriter.getBoolAttr(false), scaleAttr,
           /*sliding_window_size=*/IntegerAttr(),
           /*memory_config=*/MemoryConfigAttr());
