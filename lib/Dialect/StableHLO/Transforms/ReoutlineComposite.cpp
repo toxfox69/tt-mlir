@@ -129,10 +129,7 @@ static bool analyzeBoundary(const llvm::SmallVector<mlir::Operation *> &ops,
       if (idx >= 0) {
         mlir::Value operand = op->getOperand(j);
         if (captureSet.contains(operand)) {
-          auto it = captureArgIndex.find(operand);
-          if (it == captureArgIndex.end() || idx < it->second) {
-            captureArgIndex[operand] = idx;
-          }
+          captureArgIndex[operand] = idx;
         }
       }
     }

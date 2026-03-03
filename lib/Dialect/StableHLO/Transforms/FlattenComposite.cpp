@@ -126,9 +126,8 @@ flattenOneComposite(mlir::stablehlo::CompositeOp comp,
     llvm::SmallVector<int64_t> argIndices;
     argIndices.reserve(cloned->getNumOperands());
     for (mlir::Value operand : cloned->getOperands()) {
-      auto it = captureToArgIndex.find(operand);
-      if (it != captureToArgIndex.end()) {
-        argIndices.push_back(it->second);
+      if (captureToArgIndex.find(operand) != captureToArgIndex.end()) {
+        argIndices.push_back(captureToArgIndex.find(operand)->second);
         hasCapture = true;
       } else {
         argIndices.push_back(-1);
