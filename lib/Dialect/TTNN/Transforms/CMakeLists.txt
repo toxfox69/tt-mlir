@@ -31,8 +31,6 @@ add_mlir_dialect_library(MLIRTTNNTransforms
         TTNNWeightBFP8Conversion.cpp
         Workarounds/Decomposition/AllGatherOpRewritePattern.cpp
         Workarounds/Decomposition/ArgMaxOpRewritePattern.cpp
-        Workarounds/Decomposition/PagedUpdateCacheOpRewritePattern.cpp
-        Workarounds/Decomposition/ConcatOpDecompositionRewritePattern.cpp
         Workarounds/Decomposition/ConcatenateHeadsOpRewritePattern.cpp
         Workarounds/Decomposition/PagedUpdateCacheOpRewritePattern.cpp
         Workarounds/Decomposition/PointToPointOpRewritePattern.cpp
@@ -51,7 +49,6 @@ add_mlir_dialect_library(MLIRTTNNTransforms
         Workarounds/Decomposition/ReduceScatterConfigRewritePattern.cpp
         Workarounds/Decomposition/RotaryEmbeddingOpRewritePattern.cpp
         Workarounds/Decomposition/SubtractOpImplicitBroadcastRewritePattern.cpp
-        Workarounds/Decomposition/ExplicateOperandBroadcastsRewritePattern.cpp
         Workarounds/Decomposition/Conv3dPadOutputChannelsRewritePattern.cpp
         Workarounds/Decomposition/Conv3dDepthPaddingRewritePattern.cpp
         Workarounds/Decomposition/PadHighDimRewritePattern.cpp
