@@ -495,20 +495,41 @@ def create_hoisted_unary_op(op_func, name):
 hoisted_unary_ops = [
     exp,
     abs,
+    atan,
+    cbrt,
     ceil,
-    floor,
-    tanh,
-    reciprocal,
-    neg,
-    sigmoid,
-    sin,
     cos,
+    erf,
+    erfc,
+    expm1,
+    floor,
+    gelu,
+    hardsigmoid,
+    is_finite,
+    log1p,
+    mish,
+    neg,
+    reciprocal,
     relu,
+    sigmoid,
+    sign,
+    silu,
+    sin,
+    tan,
+    tanh,
 ]
 
 
 @x86_only
-@pytest.mark.parametrize("shape", [(128, 128)], ids=shape_str)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (128, 128),
+        (1, 32),
+        (7, 41, 43, 11),
+    ],
+    ids=shape_str,
+)
 @pytest.mark.parametrize("test_fn", hoisted_unary_ops)
 @pytest.mark.parametrize("target", ["ttnn", "ttmetal"])
 def test_cpu_hoistable_unary_ops(
