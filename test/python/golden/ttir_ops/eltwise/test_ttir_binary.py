@@ -751,10 +751,16 @@ def create_hoisted_binary_op(op_func, name):
     return hoisted_op
 
 
-hoisted_binary_ops = [
+hoisted_binary_ops_float = [
     add,
+    atan2,
+    div,
+    logical_and,
+    logical_or,
+    logical_xor,
+    maximum,
+    minimum,
     multiply,
-    subtract,
     # TODO(#6183): Re-enable when F32 untilize on-device precision loss is fixed
     # F32 untilize on-device introduces precision loss that causes close values to become
     # identical, breaking exact equality comparisons in CPU-hoisted ops.
@@ -765,26 +771,36 @@ hoisted_binary_ops = [
     ge,
     lt,
     le,
-    minimum,
-    maximum,
+    subtract,
+]
+
+hoisted_binary_ops_float_integer = []
+
+hoisted_binary_ops_integer = [
+    bitwise_and,
+    bitwise_or,
+    bitwise_xor,
+    # logical_left_shift and logical_right_shift are excluded because random i32
+    # shift amounts (values >= 32 or negative) produce all-zero outputs, making
+    # PCC comparison degenerate. They are tested in test_logical_shift_binary_ops.
+]
+
+hoisted_binary_shapes = [
+    [(128, 128), (128, 128)],  # Same shapes
+    [(128, 128), (1, 128)],  # Broadcasting second dimension
+    [(128, 128), (128, 1)],  # Broadcasting first dimension
+    [(1, 32), (1, 32)],  # Small shapes
+    [(128, 128, 64), (128, 1, 64)],  # 3D tensors with broadcasting
+    [(7, 41, 43, 11), (7, 41, 43, 11)],  # 4D tensors
 ]
 
 
 @x86_only
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        [(128, 128), (128, 128)],  # Same shapes
-        [(128, 128), (1, 128)],  # Broadcasting second dimension
-        [(128, 128), (128, 1)],  # Broadcasting first dimension
-        [(128, 128, 64), (128, 1, 64)],  # 3D tensors with broadcasting
-    ],
-    ids=shapes_list_str,
-)
+@pytest.mark.parametrize("shapes", hoisted_binary_shapes, ids=shapes_list_str)
 @pytest.mark.parametrize("dtype", [torch.float32], ids=["f32"])
-@pytest.mark.parametrize("test_fn", hoisted_binary_ops)
+@pytest.mark.parametrize("test_fn", hoisted_binary_ops_float)
 @pytest.mark.parametrize("target", ["ttnn", "ttmetal"])
-def test_cpu_hoistable_binary_ops(
+def test_cpu_hoistable_binary_ops_float(
     test_fn: Callable,
     shapes: List[Shape],
     dtype: torch.dtype,
@@ -792,8 +808,68 @@ def test_cpu_hoistable_binary_ops(
     target: str,
     device,
 ):
-    """Test binary ops that support CPU hoisting"""
+    def module(builder: TTIRBuilder):
+        @builder.func(shapes, [dtype] * len(shapes))
+        def hoisted_binary_op_fn(
+            in0: Operand,
+            in1: Operand,
+            builder: TTIRBuilder,
+            unit_attrs: Optional[List[str]] = None,
+        ) -> Operand:
+            return test_fn(in0, in1, builder, unit_attrs=["ttir.should_hoist"])
 
+    compile_and_execute_ttir(
+        module,
+        test_base=f"{request.node.name}",
+        target=target,
+        device=device,
+    )
+
+
+@x86_only
+@pytest.mark.parametrize("shapes", hoisted_binary_shapes, ids=shapes_list_str)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.int32], ids=["f32", "i32"])
+@pytest.mark.parametrize("test_fn", hoisted_binary_ops_float_integer)
+@pytest.mark.parametrize("target", ["ttnn", "ttmetal"])
+def test_cpu_hoistable_binary_ops_float_integer(
+    test_fn: Callable,
+    shapes: List[Shape],
+    dtype: torch.dtype,
+    request,
+    target: str,
+    device,
+):
+    def module(builder: TTIRBuilder):
+        @builder.func(shapes, [dtype] * len(shapes))
+        def hoisted_binary_op_fn(
+            in0: Operand,
+            in1: Operand,
+            builder: TTIRBuilder,
+            unit_attrs: Optional[List[str]] = None,
+        ) -> Operand:
+            return test_fn(in0, in1, builder, unit_attrs=["ttir.should_hoist"])
+
+    compile_and_execute_ttir(
+        module,
+        test_base=f"{request.node.name}",
+        target=target,
+        device=device,
+    )
+
+
+@x86_only
+@pytest.mark.parametrize("shapes", hoisted_binary_shapes, ids=shapes_list_str)
+@pytest.mark.parametrize("dtype", [torch.int32], ids=["i32"])
+@pytest.mark.parametrize("test_fn", hoisted_binary_ops_integer)
+@pytest.mark.parametrize("target", ["ttnn", "ttmetal"])
+def test_cpu_hoistable_binary_ops_integer(
+    test_fn: Callable,
+    shapes: List[Shape],
+    dtype: torch.dtype,
+    request,
+    target: str,
+    device,
+):
     def module(builder: TTIRBuilder):
         @builder.func(shapes, [dtype] * len(shapes))
         def hoisted_binary_op_fn(
